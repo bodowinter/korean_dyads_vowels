@@ -1,0 +1,813 @@
+---
+title: "Vowel Quality & Politeness"
+author: "Bodo Winter"
+date: "08/06/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Prelims
+
+Load packages:
+
+```{r, message = FALSE, warning = FALSE}
+library(tidyverse)
+library(brms) # bayesian models
+library(effsize)
+```
+
+For reproducibility, show package versions:
+
+```{r}
+R.Version()
+packageVersion('tidyverse')
+packageVersion('brms')
+packageVersion('effsize')
+```
+
+Load data:
+
+```{r, message = FALSE, warning = FALSE}
+vowels <- read_csv('../data/vowel_quality_F1F2.csv')
+```
+
+Rename:
+
+```{r}
+vowels <- rename(vowels,
+                 VowelType = `Vowel type`,
+                 Dur = `Duration (ms.)`)
+```
+
+Check:
+
+```{r}
+vowels
+```
+
+Check monophthong versus diphthong:
+
+```{r}
+vowels %>% count(VowelType)
+```
+
+For now, let's just look at monophthongs:
+
+```{r}
+vowels <- filter(vowels, VowelType == 'mono')
+```
+
+Check individual vowels types:
+
+```{r}
+vowels %>% count(Vowel)
+```
+
+Check individual items (the items are lemmatized):
+
+```{r}
+table(vowels$Item)
+```
+
+Weird labels, create unique identifiers for these:
+
+```{r}
+item_ID_conversion <- tibble(Item = unique(vowels$Item),
+                             ItemID = str_c('Item', 1:length(unique(vowels$Item))))
+
+# Check:
+
+item_ID_conversion
+```
+
+Merge:
+
+```{r}
+vowels <- left_join(vowels, item_ID_conversion)
+```
+
+Get rid of the ugly "Item" column:
+
+```{r}
+vowels <- select(vowels,
+                 -Item)
+```
+
+How many unique items are there?
+
+```{r}
+length(unique(vowels$Item))
+```
+
+What is the total N of tokens?
+
+```{r}
+nrow(vowels)
+```
+
+
+## Settings for all Bayesian models
+
+Setting cores for parallel processing:
+
+```{r}
+options(mc.cores=parallel::detectCores())
+```
+
+Control parameters for better convergence:
+
+```{r}
+mcmc_controls <- list(adapt_delta = 0.95)
+```
+
+## Duration
+
+Descriptive statistics of vowel durations across speakers and items:
+
+```{r}
+vowels %>% group_by(Condition) %>% 
+  summarize(Dur_M = mean(Dur),
+            Dur = sd(Dur))
+```
+
+Check whether this is conditioned by gender:
+
+```{r}
+vowels %>% group_by(Condition, Gender) %>% 
+  summarize(Dur_M = mean(Dur),
+            Dur = sd(Dur))
+```
+
+Since we want to fit a 2 X 2 interaction while also having the option of interpreting the main effects, we'll want to sum-code the predictors that participate in the interaction:
+
+```{r}
+vowels <- mutate(vowels,
+                 Condition_c = factor(Condition),
+                 Gender_c = factor(Gender))
+
+contrasts(vowels$Condition_c) <- contr.sum(2)
+contrasts(vowels$Gender_c) <- contr.sum(2)
+```
+
+Create a model of this:
+
+```{r}
+dur_mdl <- brm(Dur ~ Condition_c * Gender_c + Vowel +
+                 (1 + Condition_c|Subject) +
+                 (1|ItemID),
+               data = vowels,
+               
+               # Priors:
+               
+               prior = c(prior('normal(0, 200)', class = 'b')),
+               
+               # MCMC settings:
+               init = 0,
+               chains = 4,
+               seed = 42,
+               control = mcmc_controls,
+               warmup = 2000, iter = 4000)
+```
+
+Posterior predictive checks:
+
+```{r, fig.width = 8, fig.height = 6}
+pp_check(dur_mdl, nsamples = 100)
+```
+
+Now a good fit.
+
+Check the model anyway:
+
+```{r}
+summary(dur_mdl)
+```
+
+See whether this works better with the lognormal:
+
+```{r}
+logdur_mdl <- brm(Dur ~ Condition_c * Gender_c + Vowel +
+                 (1 + Condition_c|Subject) +
+                 (1|ItemID),
+               data = vowels,
+               family = lognormal(),
+               
+               # Priors:
+               
+               prior = c(prior('normal(0, 200)', class = 'b')),
+               
+               # MCMC settings:
+               init = 0,
+               chains = 4,
+               seed = 42,
+               control = mcmc_controls,
+               warmup = 2000, iter = 4000)
+```
+
+Posterior predictive checks:
+
+```{r, fig.width = 8, fig.height = 6}
+pp_check(logdur_mdl, nsamples = 100)
+```
+
+Much better.
+
+Check the model anyway:
+
+```{r}
+summary(logdur_mdl)
+```
+
+No noteworthy effect of politeness, nor is there a noteworthy gender interaction.
+
+## Exploratory data viz:
+
+These are for the script only (see below for publication ready plots).
+
+Scatterplot of casual and polite vowels in F1/F2 space:
+
+```{r, fig.width = 8, fig.height = 6}
+vowels %>% 
+  ggplot(aes(x = F2, y = F1, label = Vowel, col = Condition)) +
+  geom_text(alpha = 0.6) + 
+  scale_x_reverse() +
+  scale_y_reverse() +
+  scale_color_brewer(palette = 'Dark2') +
+  theme_minimal()
+```
+
+The red ones (polite) are definitely more dispersed.
+
+Same broken up for gender:
+
+Scatterplot of casual and polite vowels in F1/F2 space:
+
+```{r, fig.width = 12, fig.height = 6}
+vowels %>% 
+  ggplot(aes(x = F2, y = F1, label = Vowel, col = Condition)) +
+  geom_text(alpha = 0.6) + 
+  scale_x_reverse() +
+  scale_y_reverse() +
+  scale_color_brewer(palette = 'Dark2') +
+  theme_minimal() +
+  facet_wrap(~Gender)
+```
+
+Get by-speaker averages for each vowel, separated by politeness condition:
+
+```{r}
+by_speak_avgs <- vowels %>%
+  group_by(Subject, Vowel, Condition) %>% 
+  summarize(F1 = mean(F1),
+            F2 = mean(F2))
+```
+
+Plot these:
+
+```{r, fig.width = 8, fig.height = 6}
+by_speak_avgs %>% ggplot(aes(x = F2, y = F1, label = Vowel, col = Condition)) +
+  geom_text(alpha = 0.6) + 
+  scale_x_reverse() +
+  scale_y_reverse() +
+  scale_color_brewer(palette = 'Dark2') +
+  theme_minimal()
+```
+
+Create a convex hull plot:
+
+```{r}
+# Separate data by condition:
+
+pol <- filter(vowels, Condition == 'Polite')
+inf <- filter(vowels, Condition == 'Casual')
+
+# Compute average F1 and F2:
+
+pol <- pol %>% group_by(Vowel) %>% 
+  summarize(F1 = mean(F1),
+            F2 = mean(F2))
+
+inf <- inf %>% group_by(Vowel) %>% 
+  summarize(F1 = mean(F1),
+            F2 = mean(F2))
+
+# Extract convex hull:
+
+pol_hull <- pol %>% 
+  slice(chull(F1, F2))
+
+inf_hull <- inf %>% 
+  slice(chull(F1, F2))
+
+# Bind both together:
+
+vowels_hull <- bind_rows(pol_hull,
+                         inf_hull) %>% 
+  mutate(Condition = c(rep('Polite', nrow(pol_hull)),
+         rep('Casual', nrow(inf_hull))))
+```
+
+Overall averages to be in the plot as well:
+
+```{r}
+vowels_avgs <- vowels %>% 
+  group_by(Vowel, Condition) %>% 
+  summarize(F1 = mean(F1),
+            F2 = mean(F2))
+```
+
+Add labels:
+
+```{r}
+vowels_avgs <- mutate(vowels_avgs,
+                      Labels = ifelse(Vowel == 'v', 'ʌ', Vowel),
+                      Labels = ifelse(Vowel == 'm', 'ɯ', Labels))
+```
+
+Convex hull plot with vowel labels:
+
+```{r, fig.width = 8, fig.height = 6}
+hull_plot <- vowels_hull %>% ggplot(aes(x = F2, y = F1, fill = Condition)) +
+  geom_polygon(alpha = 0.5) +
+  scale_x_reverse() +
+  scale_y_reverse() +
+  scale_fill_viridis_d(direction = -1,
+                       option = 'E') +
+  geom_label(data = vowels_avgs,
+             aes(x = F2, y = F1, label = Labels, fill = Condition),
+             alpha = 0.5,
+             show.legend = FALSE) +
+  xlab('F2 (Hz)') +
+  ylab('F1 (Hz)') +
+  theme_minimal()
+
+# Show in Markdown:
+
+hull_plot
+
+# Save:
+
+ggsave(plot = hull_plot, filename = '../figures/hull_plot_grand_average.png',
+       width = 10, height = 6)
+```
+
+Convex hull plot separately for men and women:
+
+Create a convex hull plot:
+
+```{r}
+# Separate data by condition:
+
+pol_M <- filter(vowels, Condition == 'Polite', Gender == 'M')
+pol_F <- filter(vowels, Condition == 'Polite', Gender == 'F')
+inf_M <- filter(vowels, Condition == 'Casual', Gender == 'M')
+inf_F <- filter(vowels, Condition == 'Casual', Gender == 'F')
+
+# Compute average F1 and F2:
+
+pol_M <- pol_M %>% group_by(Vowel) %>% 
+  summarize(F1 = mean(F1),
+            F2 = mean(F2))
+
+pol_F <- pol_F %>% group_by(Vowel) %>% 
+  summarize(F1 = mean(F1),
+            F2 = mean(F2))
+
+inf_M <- inf_M %>% group_by(Vowel) %>% 
+  summarize(F1 = mean(F1),
+            F2 = mean(F2))
+
+inf_F <- inf_F %>% group_by(Vowel) %>% 
+  summarize(F1 = mean(F1),
+            F2 = mean(F2))
+
+# Extract convex hull:
+
+pol_M_hull <- pol_M %>% 
+  slice(chull(F1, F2))
+
+pol_F_hull <- pol_F %>% 
+  slice(chull(F1, F2))
+
+inf_M_hull <- inf_M %>% 
+  slice(chull(F1, F2))
+inf_F_hull <- inf_F %>% 
+  slice(chull(F1, F2))
+
+# Bind both together:
+
+vowels_hull <- bind_rows(pol_M_hull,
+                         pol_F_hull,
+                         inf_M_hull,
+                         inf_F_hull) %>% 
+  mutate(Condition = c(rep('Polite', nrow(pol_M_hull) + nrow(pol_F_hull)),
+                       rep('Casual', nrow(inf_M_hull) + nrow(inf_F_hull))),
+         Gender = c(rep('male', nrow(pol_M_hull)),
+                    rep('female', nrow(pol_F_hull)),
+                    rep('male', nrow(inf_M_hull)),
+                    rep('female', nrow(inf_F_hull))))
+```
+
+Overall averages to be in the plot as well:
+
+```{r}
+vowels_avgs <- vowels %>% 
+  group_by(Vowel, Gender, Condition) %>% 
+  summarize(F1 = mean(F1),
+            F2 = mean(F2))
+```
+
+Add labels:
+
+```{r}
+vowels_avgs <- mutate(vowels_avgs,
+                      Labels = ifelse(Vowel == 'v', 'ʌ', Vowel),
+                      Labels = ifelse(Vowel == 'm', 'ɯ', Labels),
+                      Gender = ifelse(Gender == 'M', 'male', 'female')) # for plotting
+```
+
+Convex hull plot with vowel labels:
+
+```{r, fig.width = 12, fig.height = 6}
+hull_plot <- vowels_hull %>% ggplot(aes(x = F2, y = F1, fill = Condition)) +
+  geom_polygon(alpha = 0.5) +
+  scale_x_reverse() +
+  scale_y_reverse() +
+  scale_fill_viridis_d(direction = -1,
+                       option = 'E') +
+  geom_label(data = vowels_avgs,
+             aes(x = F2, y = F1, label = Labels, fill = Condition),
+             alpha = 0.5,
+             show.legend = FALSE) +
+  xlab('F2 (Hz)') +
+  ylab('F1 (Hz)') +
+  facet_wrap(~Gender) +
+  theme_minimal() +
+  theme(strip.text = element_text(face = 'bold',
+                                  size = 16),
+        axis.title = element_text(face = 'bold',
+                                  size = 16),
+        axis.text = element_text(size = 12),
+        panel.border = element_rect(color = 'black', fill = NA, size = 1),
+        legend.text = element_text(size = 14,
+                                   face = 'bold'),
+        legend.title = element_blank())
+
+# Show in Markdown:
+
+hull_plot
+
+# Save:
+
+ggsave(plot = hull_plot, filename = '../figures/hull_plot_by_gender.png',
+       width = 14, height = 6)
+```
+
+## Euclidian distances to midpoint:
+
+Create a "distance from vowel space midpoint" measure. For this, let's use the average F2/F1 across all vowels (regardless of politeness condition) per speaker, and then calculate how much each vowel is distant from that.
+
+```{r}
+overall_avgs <- vowels %>% group_by(Subject) %>% 
+  summarize(F1_midpoint = mean(F1),
+            F2_midpoint = mean(F2))
+```
+
+Merge the two midpoint columns back to the main dataset:
+
+```{r}
+vowels <- left_join(vowels, overall_avgs)
+```
+
+Calculate the distance:
+
+```{r}
+vowels <- mutate(vowels,
+                 F1_dist = F1 - mean(F1_midpoint),
+                 F2_dist = F2 - mean(F2_midpoint),
+                 both_dist = (abs(F1_dist) + abs(F2_dist)) / 2)
+```
+
+Calculate Euclidian distance to the midpoint — this measure probably makes the most sense.
+
+```{r}
+vowels <- mutate(vowels,
+                 ED = sqrt((F1 - F1_midpoint) ^ 2 + (F2 - F2_midpoint) ^ 2))
+```
+
+Look at average distance per politeness condition:
+
+```{r}
+vowels %>% group_by(Condition) %>% 
+  summarize(F1_dist = mean(abs(F1_dist)),
+            F2_dist = mean(abs(F2_dist)),
+            both_dist = mean(both_dist),
+            ED = mean(ED))
+```
+
+Based on Euclidian distance, the polite vowels are about 16% more peripheral. The comparison of F2 versus F1 distances seems to suggest that this is primarily driven by the front/back dimension. Looking at the plot, it seems that particularly i is more frontal and perhaps u a bit more back as well.
+
+Look at this per gender as well:
+
+```{r}
+vowels %>% group_by(Gender, Condition) %>% 
+  summarize(F1_dist = mean(abs(F1_dist)),
+            F2_dist = mean(abs(F2_dist)),
+            both_dist = mean(both_dist),
+            ED = mean(ED))
+```
+
+By how much do men and women change their Euclidian distance?
+
+```{r}
+EDs <- vowels %>% group_by(Gender, Condition) %>% 
+  summarize(F1_dist = mean(abs(F1_dist)),
+            F2_dist = mean(abs(F2_dist)),
+            both_dist = mean(both_dist),
+            ED = mean(ED)) %>% pull(ED)
+
+# Women:
+
+EDs[2] / EDs[1]
+
+# Men:
+
+EDs[4] / EDs[3]
+```
+
+Women change by 24%, men by only 9%.
+
+For plotting, create a Labels column:
+
+```{r}
+vowels <- mutate(vowels,
+                 Labels = ifelse(Vowel == 'v', 'ʌ', Vowel),
+                 Labels = ifelse(Vowel == 'm', 'ɯ', Labels))
+```
+
+Look at this as a function of condition:
+
+```{r, fig.width = 12, fig.height = 6}
+ED_plot <- vowels %>% ggplot(aes(x = reorder(Labels, ED), fill = Condition, y = ED)) +
+  geom_boxplot(alpha = 0.5) +
+  scale_fill_viridis_d(direction = -1,
+                       option = 'E') +
+  scale_color_brewer(palette = 'Dark2') +
+  xlab('') +
+  ylab('Euclidian distance (Hz)') +
+  theme_minimal() +
+  # ggtitle('(c) Vowel dispersion by individual vowel') + 
+  theme(legend.position = '')
+
+# Show in markdown:
+
+ED_plot
+```
+
+Same plot broken up by gender:
+
+```{r, fig.width = 12, fig.height = 6}
+ED_plot <- vowels %>%
+  mutate(Gender = ifelse(Gender == 'M', 'male', 'female')) %>% 
+  ggplot(aes(x = reorder(Labels, ED), fill = Condition, y = ED)) +
+  geom_boxplot(alpha = 0.5) +
+  scale_fill_viridis_d(direction = -1,
+                       option = 'E') +
+  scale_color_brewer(palette = 'Dark2') +
+  xlab('') +
+  ylab('Euclidian distance (Hz)') +
+  theme_minimal() +
+  theme(legend.position = '') +
+  facet_wrap(~Gender) +
+  theme(strip.text = element_text(face = 'bold',
+                                  size = 16),
+        axis.title = element_text(face = 'bold',
+                                  size = 16),
+        axis.text.x = element_text(size = 17),
+        panel.border = element_rect(color = 'black', fill = NA, size = 1),
+        legend.text = element_text(size = 14,
+                                   face = 'bold'),
+        legend.title = element_blank())
+
+# Show in markdown:
+
+ED_plot
+ggsave(plot = ED_plot,
+       filename = '../figures/euclidian_distances_by_vowel_by_gender.png',
+       width = 12, height = 6)
+```
+
+Let's make a plot by speaker with segments to see how this looks within speaker (maybe an even clearer picture emerges).
+
+Here we go:
+
+```{r}
+by_speaker_EDs <- vowels %>%
+  group_by(Subject, Condition) %>% 
+  summarize(ED = mean(ED, na.rm = TRUE)) %>% 
+  pivot_wider(id_cols = 'Subject',
+              names_from = 'Condition',
+              values_from = 'ED') %>% 
+  mutate(BySpeakerDiff = Polite - Casual)
+
+# Check:
+
+by_speaker_EDs
+```
+
+This is a VERY consistent pattern. All but two speakers increase their euclidian distances on average. The NAs are due to two subjects not having values in the casual condition.
+
+Quick and dirty t-test against 0 (equivalent to paired t-test):
+
+```{r}
+t.test(by_speaker_EDs$BySpeakerDiff, mu = 0)
+```
+
+Check the effect size of this:
+
+```{r}
+cohen.d(BySpeakerDiff ~ 1,
+        data = filter(by_speaker_EDs, !is.na(Casual)))
+```
+
+Double-check paired Cohen's d:
+
+
+```{r}
+ED_pairwise <- filter(by_speaker_EDs, !is.na(Casual)) %>% 
+  select(-BySpeakerDiff) %>% 
+  pivot_longer(cols = Polite:Casual,
+               names_to = 'Condition',
+               values_to = 'ED')
+cohen.d(ED ~ Condition,
+        data = ED_pairwise)
+```
+
+This is the right one.
+
+Make a Timo-style plot...
+
+```{r, fig.width = 8, fig.height = 6}
+pairplot <- vowels %>%
+  mutate(Gender = ifelse(Gender == 'M', 'male', 'female')) %>% 
+  group_by(Subject, Gender, Condition) %>% 
+  summarize(ED = mean(ED, na.rm = TRUE)) %>%
+  ggplot(aes(x = Condition, y = ED, fill = Condition, group = Subject)) +
+  geom_line(color = 'grey') +
+  geom_point(size = 3, alpha = 0.5, pch = 21, color = 'black') +
+  ylab('Euclidian distance (Hz)') +
+  xlab('') + 
+  scale_fill_viridis_d(direction = -1,
+                       option = 'E') +  
+  facet_wrap(~Gender) +
+  theme_minimal() +
+  theme(strip.text = element_text(face = 'bold',
+                                  size = 16),
+        axis.title = element_text(face = 'bold',
+                                  size = 16),
+        axis.text.x = element_text(size = 17),
+        # panel.border = element_rect(color = 'black', fill = NA, size = 1),
+        legend.text = element_text(size = 14,
+                                   face = 'bold'),
+        legend.title = element_blank(),
+        legend.position = '')
+
+# Show in Markdown:
+
+pairplot
+ggsave(plot = pairplot,
+       filename = '../figures/euclidian_distance_by_speaker.png',
+       width = 5, height = 3)
+```
+
+I think this is very promising.
+
+## Bayesian model of this euclidian distance result:
+
+First, for reporting, what is the correlation between the Euclidian distance measure and duration (violating the independence assumption for now — need to disentangle this once I get "words"):
+
+```{r}
+with(vowels, cor(ED, Dur))
+```
+
+What are sensible priors for the ED measure?
+
+```{r}
+mean(vowels$ED)
+sd(vowels$ED)
+range(vowels$ED)
+```
+
+Set priors:
+
+```{r}
+my_priors <- c(prior('normal(0, 200)', class = 'b'))
+```
+
+The main model:
+
+```{r, message = FALSE, warning = FALSE, cache = TRUE}
+ED_mdl <- brm(ED ~ Condition_c * Gender_c + Vowel + Dur +
+                (1 + Condition_c|Subject) + (1|ItemID),
+              data = vowels,
+              
+              # Priors:
+               
+              prior = c(prior('normal(0, 200)', class = 'b')),
+               
+              # MCMC settings:
+              init = 0,
+              chains = 4,
+              seed = 42,
+              control = mcmc_controls,
+              warmup = 2000, iter = 4000)
+```
+
+Save the model:
+
+```{r}
+save(ED_mdl, file = '../models/ED_mdl.RData',
+     compress = 'xz', compression_level = 9)
+```
+
+Perform posterior predictive checks:
+
+```{r}
+pp_check(ED_mdl, nsamples = 100)
+```
+
+Not that good.
+
+The main model:
+
+```{r, message = FALSE, warning = FALSE, cache = TRUE}
+ED_lognormal_mdl <- brm(ED ~ Condition_c * Gender_c + Vowel + Dur +
+                          (1 + Condition_c|Subject) + (1|ItemID),
+                        data = vowels,
+                        family = lognormal(),
+              
+                        # Priors:
+               
+                        prior = c(prior('normal(0, 200)', class = 'b')),
+               
+                        # MCMC settings:
+                        init = 0,
+                        chains = 4,
+                        seed = 42,
+                        control = mcmc_controls,
+                        warmup = 2000, iter = 4000)
+```
+
+Save the model:
+
+```{r}
+save(ED_lognormal_mdl, file = '../models/ED_lognormal_mdl.RData',
+     compress = 'xz', compression_level = 9)
+```
+
+Perform posterior predictive checks:
+
+```{r}
+pp_check(ED_lognormal_mdl, nsamples = 100)
+```
+
+Not really that much better.
+
+Check the models:
+
+```{r}
+summary(ED_mdl)
+
+summary(ED_lognormal_mdl)
+```
+
+
+Get posterior samples:
+
+```{r}
+ED_posts <- posterior_samples(ED_mdl)
+ED_lognormal_posts <- posterior_samples(ED_lognormal_mdl)
+```
+
+Check the first few rows and columns:
+
+```{r}
+head(ED_posts)[, 1:10]
+```
+
+Check the posterior probability of the condition effect being below zero:
+
+```{r}
+1 - sum(ED_posts$b_Condition_c1 < 0) / nrow(ED_posts)
+1 - sum(ED_lognormal_posts$b_Condition_c1 < 0) / nrow(ED_lognormal_posts)
+```
+
+p = 0.0675 ... very small probability of the effect being below zero.
+
+
+
+
+
